@@ -16,7 +16,9 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
+import java.util.concurrent.Executors
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.MediaStoreOutputOptions
@@ -45,7 +47,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var sessionName = ""
     private var recStartNs = 0L
     private val imuCsv = StringBuilder()
+    private val frameCsv = StringBuilder()
+    private var frameCount = 0
     private var gyroCount = 0
+    private val analysisExecutor = Executors.newSingleThreadExecutor()
 
     // rolling Hz measurement
     private val hzWindow = ArrayDeque<Long>()
@@ -99,13 +104,39 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             val recorder = Recorder.Builder().setQualitySelector(selector).build()
             videoCapture = VideoCapture.withOutput(recorder)
 
+            val analysis = ImageAnalysis.Builder()
+                .setTargetResolution(android.util.Size(640, 480))
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+            analysis.setAnalyzer(analysisExecutor) { image ->
+                if (isLogging) {
+                    frameCount++
+                    frameCsv.append(frameCount).append(',')
+                        .append(image.imageInfo.timestamp).append('\n')
+                }
+                image.close()
+            }
+
             try {
                 provider.unbindAll()
                 provider.bindToLifecycle(
-                    this, CameraSelector.DEFAULT_BACK_CAMERA, preview, videoCapture
+                    this, CameraSelector.DEFAULT_BACK_CAMERA,
+                    preview, videoCapture, analysis
                 )
             } catch (e: Exception) {
-                Toast.makeText(this, "Camera bind failed: ${e.message}", Toast.LENGTH_LONG).show()
+                // some devices cannot run 3 streams; fall back to 2
+                try {
+                    provider.unbindAll()
+                    provider.bindToLifecycle(
+                        this, CameraSelector.DEFAULT_BACK_CAMERA, preview, videoCapture
+                    )
+                    Toast.makeText(this,
+                        "Frame-timestamp stream unavailable; using 2-stream mode",
+                        Toast.LENGTH_LONG).show()
+                } catch (e2: Exception) {
+                    Toast.makeText(this, "Camera bind failed: ${e2.message}",
+                        Toast.LENGTH_LONG).show()
+                }
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -117,6 +148,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
         imuCsv.setLength(0)
         imuCsv.append("t_ns,sensor,x,y,z\n")
+        frameCsv.setLength(0)
+        frameCsv.append("frame,t_ns\n")
+        frameCount = 0
         gyroCount = 0
 
         val values = ContentValues().apply {
@@ -164,6 +198,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     private fun saveCsvAndMeta() {
         writeDocument("$sessionName-imu.csv", "text/csv", imuCsv.toString())
+        writeDocument("$sessionName-frames.csv", "text/csv", frameCsv.toString())
         val meta = """
             {
               "app": "GyroCapture v0.2 (native)",
@@ -172,6 +207,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
               "rec_start_elapsedRealtimeNanos": $recStartNs,
               "imu_clock": "SensorEvent.timestamp (elapsedRealtimeNanos, same clock as rec start)",
               "gyro_samples": $gyroCount,
+              "frame_timestamps": $frameCount,
               "note": "frame_k_time_ns ~= rec_start + k * (1e9/fps). Subtract rec_start from t_ns for time since video start."
             }
         """.trimIndent()
