@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.widget.Button
+import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -37,6 +38,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     private lateinit var previewView: PreviewView
     private lateinit var recordBtn: Button
+    private lateinit var labelInput: EditText
     private lateinit var stats: TextView
     private lateinit var sensorManager: SensorManager
 
@@ -66,6 +68,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         setContentView(R.layout.activity_main)
         previewView = findViewById(R.id.previewView)
         recordBtn = findViewById(R.id.recordBtn)
+        labelInput = findViewById(R.id.labelInput)
         stats = findViewById(R.id.stats)
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
 
@@ -143,7 +146,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     private fun startSession() {
         val vc = videoCapture ?: return
-        sessionName = "gyrocap_" +
+        val label = labelInput.text.toString()
+            .trim().replace(Regex("[^A-Za-z0-9_-]"), "_")
+        sessionName = if (label.isNotEmpty()) label
+        else "gyrocap_" +
             SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(System.currentTimeMillis())
 
         imuCsv.setLength(0)
